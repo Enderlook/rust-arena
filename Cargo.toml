@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 authors = ["Enderlook"]
 repository = "https://github.com/Enderlook/rust-arena"
+documentation = "https://enderlook.github.io/rust-arena/"
 license = "AGPL-3.0-only"
 keywords = ["memory", "arena"]
 categories = ["memory-management"]
