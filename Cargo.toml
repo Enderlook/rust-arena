@@ -1,0 +1,17 @@
+[package]
+name = "enderlook_arena"
+version = "0.1.0"
+edition = "2024"
+authors = ["Enderlook"]
+repository = "https://github.com/Enderlook/rust-arena"
+license = "AGPL-3.0-only"
+keywords = ["memory", "arena"]
+categories = ["memory-management"]
+
+[profile.release]
+lto = true
+panic = 'abort'
+codegen-units = 1
+
+[dependencies]
+parking_lot = "0.12.5"
