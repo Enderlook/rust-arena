@@ -1,0 +1,114 @@
+name: Rust
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install nightly Rust
+      uses: dtolnay/rust-toolchain@nightly
+
+    - name: Install cargo-llvm-cov
+      uses: taiki-e/install-action@cargo-llvm-cov
+
+    - name: Install Miri
+      run: rustup component add miri && cargo miri setup
+
+    - name: Install cargo2junit
+      run: cargo install cargo2junit
+
+    - name: Run tests (once_cell + clone_to_uninit)
+      run: cargo test --verbose --no-default-features --features "once_cell clone_to_uninit" --no-fail-fast -- -Z unstable-options --format json > test_output1.json
+
+    - name: Run miri tests (once_lock + clone_to_uninit)
+      run: cargo miri test --verbose --no-default-features --features "once_lock clone_to_uninit" --no-fail-fast -- -Z unstable-options --format json > test_output2.json
+
+    - name: Run miri tests (once_lock + clone_to_uninit + ptr_metadata)
+      run: cargo miri test --verbose --no-default-features --features "once_lock ptr_metadata clone_to_uninit" --no-fail-fast -- -Z unstable-options --format json > test_output3.json
+
+    - name: Merge test outputs
+      run: jq -c '.' test_output1.json test_output2.json test_output3.json > all_tests.json
+
+    - name: Create JUnit
+      run: |
+        cargo2junit < all_tests.json > junit.xml
+        cat junit.xml
+
+    - name: Codecov tests
+      uses: codecov/codecov-action@v5
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        report_type: test_results
+        verbose: true
+        files: junit.xml
+        fail_ci_if_error: true
+
+    - name: Generate coverage
+      run: |
+        cargo llvm-cov clean --workspace
+        cargo llvm-cov --no-report --no-default-features --features "once_cell clone_to_uninit"
+        cargo llvm-cov --no-report --no-default-features --features "once_lock clone_to_uninit"
+        cargo llvm-cov --no-report --no-default-features --features "once_lock clone_to_uninit ptr_metadata"
+        cargo llvm-cov report --lcov --output-path lcov.info
+
+    - name: Codecov coverage
+      uses: codecov/codecov-action@v5
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        report_type: coverage
+        verbose: true
+        files: lcov.info
+        fail_ci_if_error: true
+
+    - name: Build docs
+      if: github.event_name == 'push'
+      run: cargo doc --no-deps --features "doc_cfg"
+
+    - name: Prepare Pages artifact
+      if: github.event_name == 'push'
+      run: |
+        mkdir public
+        cp -r target/doc/* public/
+        touch public/.nojekyll
+        echo '<meta http-equiv="refresh" content="0; url=enderlook_arena/index.html">' > public/index.html
+
+    - name: Upload artifact
+      if: github.event_name == 'push'
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: public
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Deploy to GitHub Pages
+        if: github.event_name == 'push'
+        id: deployment
+        uses: actions/deploy-pages@v4

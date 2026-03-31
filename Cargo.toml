@@ -4,9 +4,13 @@ version = "0.1.0"
 edition = "2024"
 authors = ["Enderlook"]
 repository = "https://github.com/Enderlook/rust-arena"
+documentation = "https://enderlook.github.io/rust-arena/"
 license = "AGPL-3.0-only"
 keywords = ["memory", "arena"]
 categories = ["memory-management"]
+
+[package.metadata.docs.rs]
+features = ["doc_cfg"]
 
 [profile.release]
 lto = true
@@ -19,7 +23,7 @@ clone_to_uninit = ["ptr_metadata"]
 ptr_metadata = []
 once_lock = []
 once_cell = ["dep:once_cell"]
-doc_cfg = []
+doc_cfg = ["clone_to_uninit"]
 
 [dependencies]
 once_cell = { version = "1.21.4", optional = true, features = ["parking_lot"] }
