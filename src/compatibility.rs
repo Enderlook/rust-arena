@@ -58,6 +58,10 @@ pub trait MutPtr_<T> {
     fn cast_slice_(self, len: usize) -> *mut [T];
 }
 
+pub trait MutPtrSlice_<T> {
+    unsafe fn get_unchecked_mut_(self, index: usize) -> *mut T;
+}
+
 pub trait UnsafeCell_<T: ?Sized> {
     unsafe fn as_mut_unchecked_(&self) -> &mut T;
     unsafe fn as_ref_unchecked_(&self) -> &T;
@@ -93,6 +97,14 @@ impl<T> MutPtr_<T> for *mut T {
     #[inline(always)]
     fn cast_slice_(self, len: usize) -> *mut [T] {
         ptr::slice_from_raw_parts_mut(self, len)
+    }
+}
+
+impl<T> MutPtrSlice_<T> for *mut [T] {
+    #[inline(always)]
+    unsafe fn get_unchecked_mut_(self, index: usize) -> *mut T {
+        // SAFETY: caller must ensure index is in bounds.
+        unsafe { (self as *mut T).add(index) }
     }
 }
 

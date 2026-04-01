@@ -7,6 +7,8 @@ mod boxed;
 mod chunk;
 mod local_arena;
 mod shared_arena;
+pub mod unsync;
+pub mod unrolled_list;
 
 pub(crate) mod compatibility;
 
