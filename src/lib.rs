@@ -9,24 +9,32 @@
 //!
 //! The crate also provides an [Arena] trait to make more arenas.
 
-#![feature(ptr_metadata)]
-#![feature(clone_to_uninit)]
-#![feature(cast_maybe_uninit)]
-#![feature(unsafe_cell_access)]
-#![feature(ptr_cast_slice)]
-#![feature(once_cell_try)]
-#![feature(layout_for_ptr)]
-#![feature(slice_ptr_get)]
+#![cfg_attr(test, feature(layout_for_ptr))]
+#![cfg_attr(feature = "clone_to_uninit", feature(clone_to_uninit))]
+#![cfg_attr(feature = "ptr_metadata", feature(ptr_metadata))]
+#![cfg_attr(feature = "once_lock", feature(once_cell_try))]
+#![cfg_attr(feature = "doc_cfg", feature(doc_cfg))]
 
 mod boxed;
 mod chunk;
 mod local_arena;
 mod shared_arena;
 
+pub(crate) mod compatibility;
+
 #[cfg(test)]
 mod arena_test;
 
-use std::{alloc::Layout, clone::CloneToUninit, error::Error, fmt, marker::PhantomData, mem::MaybeUninit, ops::Range, ptr::{self, NonNull}, sync::OnceLock};
+use std::{alloc::Layout, error::Error, fmt, marker::PhantomData, mem::MaybeUninit, ops::Range, ptr::{self, NonNull}};
+
+#[cfg(feature = "once_cell")]
+use once_cell::sync::OnceCell;
+
+#[cfg(feature = "once_lock")]
+use std::sync::OnceLock;
+
+#[cfg(feature = "clone_to_uninit")]
+use std::clone::CloneToUninit;
 
 pub use boxed::*;
 pub use local_arena::*;
@@ -34,7 +42,12 @@ pub use shared_arena::*;
 
 use crate::chunk::{Chunk, ChunkPtr};
 
+use compatibility::*;
+
+#[cfg(feature = "once_lock")]
 static SENTINEL: OnceLock<Sentinel> = OnceLock::new();
+#[cfg(feature = "once_cell")]
+static SENTINEL: OnceCell<Sentinel> = OnceCell::new();
 
 struct Sentinel(ChunkPtr);
 
@@ -525,7 +538,7 @@ pub trait Arena {
         };
         unsafe {
             let ptr = Box::into_non_null(result.0);
-            (Box::from_non_null(ptr.cast::<T::Item>().cast_slice(count)), remaining)
+            (Box::from_non_null(ptr.cast::<T::Item>().cast_slice_(count)), remaining)
         }
     }
 
@@ -545,6 +558,8 @@ pub trait Arena {
 
     /// Try to allocate an object in the arena by cloning from a reference.
     #[inline(always)]
+    #[cfg(feature = "clone_to_uninit")]
+    #[cfg_attr(feature = "doc_cfg", doc(cfg(feature = "clone_to_uninit")))]
     fn try_alloc_from_clone<T: CloneToUninit + ?Sized>(&self, value: &T) -> Result<Box<'_, T>, AllocError> {
         let metadata = ptr::metadata(value);
         let layout = Layout::for_value(value);
@@ -562,7 +577,7 @@ pub trait Arena {
         for (i, v) in slice.iter().cloned().enumerate() {
             unsafe { dst.add(i).write(v); }
         }
-        Ok(unsafe { Box::from_non_null(dst.cast_slice(slice.len())) })
+        Ok(unsafe { Box::from_non_null(dst.cast_slice_(slice.len())) })
     }
 
     /// Try to allocate a slice in the arena.
@@ -571,7 +586,7 @@ pub trait Arena {
         let allocation = self.try_alloc_layout(Layout::for_value(slice))?;
         let dst = Box::into_non_null(allocation).cast::<T>();
         unsafe { ptr::copy_nonoverlapping(slice.as_ptr(), dst.as_ptr(), slice.len()); }
-        Ok(unsafe { Box::from_non_null(dst.cast_slice(slice.len())) })
+        Ok(unsafe { Box::from_non_null(dst.cast_slice_(slice.len())) })
     }
 
     /// Try to allocate a slice of the specified element in the arena, filled with values of the specified function.
@@ -610,7 +625,7 @@ pub trait Arena {
         for i in 0..len {
             unsafe { dst.add(i).write(f(i)); }
         }
-        Ok(unsafe { Box::from_non_null(dst.cast_slice(len)) })
+        Ok(unsafe { Box::from_non_null(dst.cast_slice_(len)) })
     }
 
     /// Try to allocate a slice in the arena.
@@ -619,7 +634,7 @@ pub trait Arena {
         let layout = Layout::array::<MaybeUninit<T>>(len).map_err(#[inline(always)] |_| AllocError::InvalidLayout)?;
         let allocation = self.try_alloc_layout(layout)?;
         let dst = Box::into_non_null(allocation);
-        Ok(unsafe { Box::from_non_null(dst.cast::<MaybeUninit<T>>().cast_slice(len)) })
+        Ok(unsafe { Box::from_non_null(dst.cast::<MaybeUninit<T>>().cast_slice_(len)) })
     }
 
     /// Attempts to allocate a slice of the specified minimum and maximum len using the current chunk's remaining space.
@@ -692,10 +707,10 @@ pub trait Arena {
             }).ok()?;
             let dst = Box::into_non_null(slice);
             let len = write_element_state.count();
-            Some(unsafe { Box::from_non_null(dst.cast::<MaybeUninit<T>>().cast_slice(len)) })
+            Some(unsafe { Box::from_non_null(dst.cast::<MaybeUninit<T>>().cast_slice_(len)) })
         } else {
             let max = usize::max(range_len.start, range_len.end);
-            Some(unsafe { Box::from_non_null(NonNull::dangling().cast_slice(max)) })
+            Some(unsafe { Box::from_non_null(NonNull::dangling().cast_slice_(max)) })
         }
     }
 
@@ -771,9 +786,9 @@ pub trait Arena {
             }).expect("allocation failed: slice allocation should be supported (len 0).");
             let dst = Box::into_non_null(slice);
             let len = write_element_state.count();
-            unsafe { Box::from_non_null(dst.cast::<MaybeUninit<T>>().cast_slice(len)) }
+            unsafe { Box::from_non_null(dst.cast::<MaybeUninit<T>>().cast_slice_(len)) }
         } else {
-            unsafe { Box::from_non_null(NonNull::dangling().cast_slice(maximum_len)) }
+            unsafe { Box::from_non_null(NonNull::dangling().cast_slice_(maximum_len)) }
         }
     }
 

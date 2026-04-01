@@ -2,6 +2,8 @@ use std::{alloc::Layout, cell::UnsafeCell, marker::PhantomData, mem::{self, Mayb
 
 use crate::{AllocError, AllocationInfo, Arena, Box, BuilderDST, CancellationError, Chunk, InsertingOrder, SENTINEL, Sentinel, SharedArena, WriteElementState, chunk::{ChunkPtr, DSTInfo}};
 
+use crate::compatibility::*;
+
 /// Represent a thread-local arena.
 pub struct LocalArena {
     frontier: UnsafeCell<ChunkPtr>,
@@ -25,7 +27,7 @@ impl LocalArena {
 
     #[cold]
     fn try_grow_and_alloc(&self, layout: Layout) -> Result<Box<'_, [MaybeUninit<u8>]>, AllocError> {
-        let len = unsafe { self.frontier.as_mut_unchecked().as_ref() }.storage.len();
+        let len = unsafe { self.frontier.as_mut_unchecked_().as_ref() }.storage.len();
         let size = len.checked_add(1).map(#[inline(always)] |e| e.checked_next_power_of_two()).flatten().unwrap_or(len);
 
         let sentinel = SENTINEL.get();
@@ -33,7 +35,7 @@ impl LocalArena {
         let sentinel = unsafe { sentinel.unwrap_unchecked().0 };
 
         let mut new_chunk = self.shared.get_or_make_chunk(layout, size)?;
-        let old_chunk = unsafe { self.frontier.replace(new_chunk) };
+        let old_chunk = unsafe { self.frontier.replace_(new_chunk) };
         if !ptr::eq(sentinel.as_ptr(), old_chunk.as_ptr()) {
             unsafe { new_chunk.as_mut() }.header.prev = Some(old_chunk);
         }
@@ -41,7 +43,7 @@ impl LocalArena {
         unsafe { (new_chunk.as_mut()).try_alloc(layout) }
             .map(#[inline(always)] |ptr| {
                 debug_assert_eq!(ptr.addr().get() % layout.align(), 0, "Invalid alignment.");
-                unsafe { Box::from_non_null(ptr.cast::<MaybeUninit<u8>>().cast_slice(layout.size())) }
+                unsafe { Box::from_non_null(ptr.cast::<MaybeUninit<u8>>().cast_slice_(layout.size())) }
             })
     }
 
@@ -53,7 +55,7 @@ impl LocalArena {
                 debug_assert!(sentinel.is_some(), "Should have value since this is only called from a constructed LocalArena.");
                 let sentinel = unsafe { sentinel.unwrap_unchecked().0 };
 
-                let old_chunk = unsafe { self.frontier.replace(new_chunk) };
+                let old_chunk = unsafe { self.frontier.replace_(new_chunk) };
                 if !ptr::eq(sentinel.as_ptr(), old_chunk.as_ptr()) {
                     unsafe { (*new_chunk.as_ptr()).header.prev = Some(old_chunk) };
                 }
@@ -68,10 +70,10 @@ impl LocalArena {
 impl Arena for LocalArena {
     #[inline(always)]
     fn try_alloc_layout(&self, layout: Layout) -> Result<Box<'_, [MaybeUninit<u8>]>, AllocError> {
-        let chunk = unsafe { self.frontier.as_mut_unchecked() };
+        let chunk = unsafe { self.frontier.as_mut_unchecked_() };
         if let Some(ptr) = unsafe { chunk.as_mut() }.try_alloc(layout).ok() {
             debug_assert_eq!(ptr.addr().get() % layout.align(), 0, "Invalid alignment.");
-            Ok(unsafe { Box::from_non_null(ptr.cast::<MaybeUninit<u8>>().cast_slice(layout.size())) })
+            Ok(unsafe { Box::from_non_null(ptr.cast::<MaybeUninit<u8>>().cast_slice_(layout.size())) })
         } else {
             self.try_grow_and_alloc(layout)
         }
@@ -80,7 +82,7 @@ impl Arena for LocalArena {
     #[inline(always)]
     fn try_alloc_remaining_dst_with_builder<B: BuilderDST>(&self, mut builder: B) -> Result<(Box<'_, [MaybeUninit<u8>]>, WriteElementState), CancellationError> {
         return if let Some(info) = DSTInfo::new(&builder) {
-            let chunk = unsafe { self.frontier.as_mut_unchecked().as_mut() };
+            let chunk = unsafe { self.frontier.as_mut_unchecked_().as_mut() };
             match chunk.try_alloc_remaining_dst_with_builder(&info) {
                 Ok(e) => e.finish(&mut builder),
                 Err(()) => slow(self, &mut builder, &info),
@@ -97,7 +99,7 @@ impl Arena for LocalArena {
                     debug_assert!(sentinel.is_some(), "Should have value since this is only called from a constructed LocalArena.");
                     let sentinel = unsafe { sentinel.unwrap_unchecked().0 };
 
-                    let old_chunk = unsafe { this.frontier.replace(new_chunk) };
+                    let old_chunk = unsafe { this.frontier.replace_(new_chunk) };
                     if !ptr::eq(sentinel.as_ptr(), old_chunk.as_ptr()) {
                         unsafe { (*new_chunk.as_ptr()).header.prev = Some(old_chunk) };
                     }
@@ -112,7 +114,7 @@ impl Arena for LocalArena {
     #[inline(always)]
     fn try_alloc_remaining_dst_with_layout(&self, header_layout: Layout, element_layout: Layout, mut elements_len: Range<usize>) -> Option<(Box<'_, [MaybeUninit<u8>]>, usize)> {
         elements_len = usize::min(elements_len.start, elements_len.end)..usize::max(elements_len.start, elements_len.end);
-        return match unsafe { self.frontier.as_mut_unchecked().as_mut() }
+        return match unsafe { self.frontier.as_mut_unchecked_().as_mut() }
             .try_alloc_remaining_dst_with_layout(header_layout, element_layout, elements_len.clone()) {
                 Some(result) => Some(result),
                 None => slow(self, header_layout, element_layout, elements_len),
@@ -130,7 +132,7 @@ impl Arena for LocalArena {
         if element_layout.size() == 0 {
             return as_zero(range_len.end);
         }
-        return match unsafe { self.frontier.as_mut_unchecked().as_mut() }
+        return match unsafe { self.frontier.as_mut_unchecked_().as_mut() }
             .try_alloc_remaining_slice_with_layout(element_layout, range_len.clone()) {
                 Some(result) => Some(result),
                 None => slow(self, element_layout, range_len),
@@ -138,7 +140,7 @@ impl Arena for LocalArena {
 
         #[cold]
         fn as_zero<'a>(end: usize) -> Option<(Box<'a, [MaybeUninit<u8>]>, usize)> {
-            Some((unsafe { Box::from_non_null(NonNull::dangling().cast_slice(0)) }, end))
+            Some((unsafe { Box::from_non_null(NonNull::dangling().cast_slice_(0)) }, end))
         }
 
         #[cold]
@@ -152,7 +154,7 @@ impl Arena for LocalArena {
         if element_layout.size() == 0{
             return as_zero(maximum_len);
         }
-        let result = unsafe { self.frontier.as_mut_unchecked().as_mut() }
+        let result = unsafe { self.frontier.as_mut_unchecked_().as_mut() }
             .alloc_remaining_slice_with_layout(element_layout, maximum_len);
         return if result.1 > 0 || maximum_len == 0 {
             result
@@ -162,7 +164,7 @@ impl Arena for LocalArena {
 
         #[cold]
         fn as_zero<'a>(maximum_len: usize) -> (Box<'a, [MaybeUninit<u8>]>, usize) {
-            (unsafe { Box::from_non_null(NonNull::dangling().cast_slice(0)) }, maximum_len)
+            (unsafe { Box::from_non_null(NonNull::dangling().cast_slice_(0)) }, maximum_len)
         }
 
         #[cold]
@@ -179,7 +181,7 @@ impl Arena for LocalArena {
             return as_zero(iter);
         }
         let iter = iter.into_iter();
-        let (result, remaining) = unsafe { self.frontier.as_mut_unchecked().as_mut() }.alloc_remaining_slice_from_iter_with_order(iter, inserting_order);
+        let (result, remaining) = unsafe { self.frontier.as_mut_unchecked_().as_mut() }.alloc_remaining_slice_from_iter_with_order(iter, inserting_order);
         if result.len() == 0 {
             if let Some(iter) = remaining {
                 return slow(self, iter, inserting_order);
@@ -195,13 +197,13 @@ impl Arena for LocalArena {
                 // There is no point in storing zero-sized values.
                 count += 1;
             }
-            (unsafe { Box::from_non_null(NonNull::dangling().cast_slice(count)) }, None)
+            (unsafe { Box::from_non_null(NonNull::dangling().cast_slice_(count)) }, None)
         }
 
         #[cold]
         fn slow<T: Iterator>(this: &LocalArena, iter: T, inserting_order: InsertingOrder) -> (Box<'_, [T::Item]>, Option<T>) {
             this.try_get_chunk_and_alloc(#[inline(always)] |shared| shared.alloc_remaining_slice_from_iter_with_order(iter, inserting_order))
-                .unwrap_or_else(#[inline(always)] |e| (unsafe { Box::from_non_null(NonNull::dangling().cast_slice(0)) }, Some(e)))
+                .unwrap_or_else(#[inline(always)] |e| (unsafe { Box::from_non_null(NonNull::dangling().cast_slice_(0)) }, Some(e)))
         }
     }
 
@@ -211,7 +213,7 @@ impl Arena for LocalArena {
         let sentinel = SENTINEL.get();
         debug_assert!(sentinel.is_some(), "Should have value since this is only called from a constructed LocalArena.");
         let sentinel = unsafe { sentinel.unwrap_unchecked().0 };
-        let chunk = unsafe { self.frontier.replace(sentinel) };
+        let chunk = unsafe { self.frontier.replace_(sentinel) };
         if !chunk.are_equal(sentinel) {
             // We only clear if the chunk is not the sentinel,
             // as that one is immutable.
@@ -220,7 +222,7 @@ impl Arena for LocalArena {
     }
 
     fn allocation_info(&self) -> AllocationInfo {
-        let mut chunk = unsafe { self.frontier.as_ref_unchecked().as_ref() };
+        let mut chunk = unsafe { self.frontier.as_ref_unchecked_().as_ref() };
         let mut info = AllocationInfo::default();
         loop {
             info.user_bytes += chunk.storage.len() - (chunk.header.current_bump_ptr.as_ptr().addr() - chunk.storage.as_ptr() as usize);
@@ -237,7 +239,7 @@ impl Arena for LocalArena {
 
     #[inline]
     fn remaining_chunk_capacity(&self) -> usize {
-        let chunk = unsafe { self.frontier.as_ref_unchecked().as_ref() };
+        let chunk = unsafe { self.frontier.as_ref_unchecked_().as_ref() };
         let remaining = chunk.header.current_bump_ptr.as_ptr().addr() - chunk.storage.as_ptr().addr();
         remaining
     }

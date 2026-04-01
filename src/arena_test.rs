@@ -118,6 +118,7 @@ macro_rules! arena_test_ {
         }
 
         #[test]
+        #[cfg(feature = "clone_to_uninit")]
         fn try_alloc_from_clone() {
             let shared = SharedArena::default();
             let arena = $a(shared.make_local());
