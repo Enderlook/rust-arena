@@ -4,6 +4,8 @@ use parking_lot::Mutex;
 
 use crate::{AllocError, Box, BuilderDST, CancellationError, InsertingOrder, LocalArena, SENTINEL, WriteElementState, chunk::{AllocDSTBuilder, Chunk, ChunkHeader, ChunkPtr, DSTInfo}};
 
+use crate::compatibility::*;
+
 pub(crate) const MINIMUM_ALLOCATED_SIZE: usize = 1024;
 
 /// Represent a shared thread-safe arena.
@@ -139,8 +141,9 @@ impl Drop for SharedArenaInner {
         if let Some(e) = &mut *self.0.lock() {
             let ptr = e.as_non_null().as_ptr();
             unsafe {
+                let layout = (*e).get_layout();
                 ptr::drop_in_place(ptr);
-                dealloc(ptr.cast::<u8>(), Layout::for_value_raw(ptr))
+                dealloc(ptr.cast::<u8>(), layout);
             }
         }
     }
@@ -213,7 +216,7 @@ fn clean_and_append(chunk: &mut ChunkPtr, old_root: Option<ChunkPtr>) {
     unsafe {
         let chunk = chunk.as_ptr();
         debug_assert_ne!(chunk, SENTINEL.get().expect("Should have value since this is only called from a constructed LocalArena.").0.as_ptr());
-        let storage_len = ptr::metadata(chunk);
+        let storage_len = ptr_metadata!(chunk);
         let storage_start = chunk.cast::<u8>().add(mem::size_of::<ChunkHeader>());
         let storage_end_ptr = storage_start.add(storage_len);
         (*chunk).header.current_bump_ptr = NonNull::new_unchecked(storage_end_ptr);
@@ -221,7 +224,7 @@ fn clean_and_append(chunk: &mut ChunkPtr, old_root: Option<ChunkPtr>) {
         while let Some(prev) = (*tail).header.prev {
             let prev = prev.as_ptr();
             debug_assert_ne!(prev, SENTINEL.get().expect("Should have value since this is only called from a constructed LocalArena.").0.as_ptr());
-            let storage_len = ptr::metadata(prev);
+            let storage_len = ptr_metadata!(prev);
             let storage_start = prev.cast::<u8>().add(mem::size_of::<ChunkHeader>());
             let storage_end_ptr = storage_start.add(storage_len);
             (*prev).header.current_bump_ptr = NonNull::new_unchecked(storage_end_ptr);

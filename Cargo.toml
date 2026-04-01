@@ -13,5 +13,13 @@ lto = true
 panic = 'abort'
 codegen-units = 1
 
+[features]
+default = ["once_cell"]
+clone_to_uninit = ["ptr_metadata"]
+ptr_metadata = []
+once_lock = []
+once_cell = ["dep:once_cell"]
+
 [dependencies]
+once_cell = { version = "1.21.4", optional = true, features = ["parking_lot"] }
 parking_lot = "0.12.5"

@@ -1,5 +1,7 @@
 use std::{any::Any, borrow::{Borrow, BorrowMut}, fmt, marker::PhantomData, mem::{ManuallyDrop, MaybeUninit}, ops::{Deref, DerefMut}, ptr::NonNull};
 
+use crate::compatibility::*;
+
 /// An owned pointer to an arena-allocated `T` value, that runs `Drop` implementations.
 #[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 #[repr(transparent)]
@@ -24,7 +26,7 @@ impl<'a, T> Box<'a, T> {
     pub fn take(this: Self) -> (T, Box<'a, MaybeUninit<T>>) {
         let raw = Box::into_non_null(this);
         let value = unsafe { raw.read() };
-        let uninit = unsafe { Box::from_non_null(raw.cast_uninit()) };
+        let uninit = unsafe { Box::from_non_null(raw.cast_uninit_()) };
         (value, uninit)
     }
 }
@@ -178,7 +180,7 @@ impl<'a, T> Default for Box<'a, [T]> {
     #[inline(always)]
     fn default() -> Box<'a, [T]> {
         // It's safe to drop an empty slice later.
-        Box(NonNull::dangling().cast_slice(0), PhantomData)
+        Box(NonNull::dangling().cast_slice_(0), PhantomData)
     }
 }
 

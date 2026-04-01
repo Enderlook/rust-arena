@@ -1,7 +1,8 @@
-use core::slice;
-use std::{alloc::{Layout, alloc, dealloc}, mem::{ManuallyDrop, MaybeUninit}, num::NonZero, ops::Range, ptr::{self, NonNull}, usize};
+use std::{alloc::{Layout, alloc, dealloc}, mem::{ManuallyDrop, MaybeUninit}, num::NonZero, ops::Range, ptr::{self, NonNull}, slice, usize};
 
 use crate::{AllocError, Box, BuilderDST, CancellationError, InsertingOrder, WriteElementState};
+
+use crate::compatibility::*;
 
 #[repr(C)]
 pub(crate) struct ChunkHeader {
@@ -14,10 +15,11 @@ pub(crate) struct ChunkHeader {
 impl Drop for ChunkHeader {
     fn drop(&mut self) {
         if let Some(e) = &mut self.prev {
-            let ptr = e.as_non_null().as_ptr();
+            let ptr = e.as_ptr();
             unsafe {
+                let layout = (*e).get_layout();
                 ptr::drop_in_place(ptr);
-                dealloc(ptr.cast::<u8>(), Layout::for_value_raw(ptr))
+                dealloc(ptr.cast::<u8>(), layout)
             }
         }
     }
@@ -41,27 +43,37 @@ impl ChunkPtr {
 
     #[inline(always)]
     pub(crate) fn as_non_null(self) -> NonNull<Chunk> {
-        unsafe { NonNull::from_raw_parts(self.0, self.0.cast::<ChunkHeader>().as_ref().len) }
+        unsafe { nonnull_from_raw_parts!(self.0, self.0.cast::<ChunkHeader>().as_ref().len) }
     }
 
     #[inline(always)]
     pub(crate) fn as_ptr(self) -> *mut Chunk {
-        unsafe { ptr::from_raw_parts_mut(self.0.as_ptr(), self.0.cast::<ChunkHeader>().as_ref().len) }
+        unsafe { ptr_from_raw_parts_mut!(self.0.as_ptr(), self.0.cast::<ChunkHeader>().as_ref().len) }
     }
 
     #[inline(always)]
     pub(crate) unsafe fn as_mut(&mut self) -> &mut Chunk {
-        unsafe { &mut *ptr::from_raw_parts_mut(self.0.as_ptr(), self.0.cast::<ChunkHeader>().as_ref().len) }
+        unsafe { &mut *self.as_ptr() }
     }
 
     #[inline(always)]
     pub(crate) unsafe fn as_ref(&self) -> &Chunk {
-        unsafe { & *ptr::from_raw_parts(self.0.as_ptr(), self.0.cast::<ChunkHeader>().as_ref().len) }
+        unsafe { & *self.as_ptr() }
     }
 
     #[inline(always)]
     pub(crate) fn are_equal(&self, other: ChunkPtr) -> bool {
         ptr::eq(self.0.as_ptr(), other.0.as_ptr())
+    }
+
+    #[inline(always)]
+    pub(crate) fn get_layout(&self) -> Layout {
+        // return unsafe { Layout::for_value_raw(self.as_ptr()) };
+        unsafe { Layout::new::<ChunkHeader>()
+            .extend(Layout::array::<u8>(self.0.cast::<ChunkHeader>().as_ref().len ).map_err(#[inline(always)] |_| AllocError::InvalidLayout).unwrap_unchecked())
+            .map_err(#[inline(always)] |_| AllocError::InvalidLayout).unwrap_unchecked() }
+            .0
+            .pad_to_align()
     }
 }
 
@@ -79,7 +91,7 @@ impl Chunk {
             return Err(AllocError::OutOfMemory);
         }
 
-        let mut chunk = unsafe { NonNull::<Chunk>::from_raw_parts(NonNull::new_unchecked(ptr as *mut ()), size) };
+        let mut chunk = unsafe { NonNull::<Chunk>::new_unchecked(ptr_from_raw_parts_mut!(ptr as *mut (), size)) };
         let chunk_ref = unsafe { chunk.as_mut() };
         chunk_ref.header.current_bump_ptr = unsafe { NonNull::new_unchecked(ptr.add(extend).add(size)) };
         chunk_ref.header.prev = None;
@@ -167,7 +179,7 @@ impl Chunk {
         // Round pointer down to alignment.
         let aligned_ptr = current_ptr & !(align - 1);
         if aligned_ptr < start_ptr {
-            return (unsafe { Box::from_non_null(NonNull::dangling().cast_slice(0)) }, 0);
+            return (unsafe { Box::from_non_null(NonNull::dangling().cast_slice_(0)) }, 0);
         }
 
         let remaining_bytes = aligned_ptr - start_ptr;
@@ -182,7 +194,7 @@ impl Chunk {
         let new_ptr = self.storage.as_mut_ptr().with_addr(new_ptr);
         self.header.current_bump_ptr = unsafe { NonNull::new_unchecked(new_ptr) };
 
-        (unsafe { Box::from_raw(new_ptr.cast::<MaybeUninit<u8>>().cast_slice(total_size)) }, element_count)
+        (unsafe { Box::from_raw(new_ptr.cast::<MaybeUninit<u8>>().cast_slice_(total_size)) }, element_count)
     }
 
     #[inline(always)]
@@ -198,7 +210,7 @@ impl Chunk {
         let aligned_ptr = current_ptr & !(align - 1);
         if aligned_ptr < start_ptr {
             return if range_len.start == 0 {
-                Some((unsafe { Box::from_non_null(NonNull::dangling().cast_slice(0)) }, 0))
+                Some((unsafe { Box::from_non_null(NonNull::dangling().cast_slice_(0)) }, 0))
             } else {
                 None
             };
@@ -219,7 +231,7 @@ impl Chunk {
         let new_ptr = self.storage.as_mut_ptr().with_addr(new_ptr);
         self.header.current_bump_ptr = unsafe { NonNull::new_unchecked(new_ptr) };
 
-        Some((unsafe { Box::from_raw(new_ptr.cast::<MaybeUninit<u8>>().cast_slice(total_size)) }, element_count))
+        Some((unsafe { Box::from_raw(new_ptr.cast::<MaybeUninit<u8>>().cast_slice_(total_size)) }, element_count))
     }
 
     #[inline(always)]
@@ -231,11 +243,12 @@ impl Chunk {
         // Calculate the alignment of the DST.
         // This works because the alignment of `T` and `[T; N]` is the same.
         let (align, header_offset) = match element_layout
-            .repeat(1)
-            .map(#[inline(always)] |e| header_layout.extend(e.0))
+            .repeat_(1)
+            .ok()
+            .map(#[inline(always)] |e| header_layout.extend(e.0).ok())
             .flatten() {
-            Ok((layout, offset)) => (layout.pad_to_align().align(), offset),
-            Err(_) => return None,
+            Some((layout, offset)) => (layout.pad_to_align().align(), offset),
+            None => return None,
         };
         debug_assert!(align > 0);
         debug_assert!(align.is_power_of_two());
@@ -256,7 +269,7 @@ impl Chunk {
         // In the case of having a ZST, the `element_size` would be 0, so we require to handle that.
         let max_fit = remaining_space.checked_div(element_size).unwrap_or(usize::MAX);
 
-        debug_assert_eq!(Ok(align), element_layout.repeat(max_fit).map(|e| header_layout.extend(e.0)).flatten().map(|e| e.0.pad_to_align().align()));
+        debug_assert_eq!(Some(align), element_layout.repeat_(max_fit).map(|e| header_layout.extend(e.0)).ok().map(|e| e.ok()).flatten().map(|e| e.0.pad_to_align().align()));
 
         if max_fit < elements_len.start {
             return None;
@@ -271,7 +284,7 @@ impl Chunk {
         let new_ptr = self.storage.as_mut_ptr().with_addr(new_ptr);
         self.header.current_bump_ptr = unsafe { NonNull::new_unchecked(new_ptr) };
 
-        Some((unsafe { Box::from_raw(new_ptr.cast::<MaybeUninit<u8>>().cast_slice(total_size)) }, element_count))
+        Some((unsafe { Box::from_raw(new_ptr.cast::<MaybeUninit<u8>>().cast_slice_(total_size)) }, element_count))
     }
 
     #[inline(always)]
@@ -339,12 +352,12 @@ impl Chunk {
         // Layout ensures that align is greater than 0.
         let aligned_ptr = current_ptr & !(align - 1);
         if aligned_ptr < start_ptr {
-            return (unsafe { Box::from_non_null(NonNull::dangling().cast_slice(0)) }, None);
+            return (unsafe { Box::from_non_null(NonNull::dangling().cast_slice_(0)) }, None);
         }
 
         let max_fit = (aligned_ptr - start_ptr) / size;
         if max_fit == 0 {
-            return (unsafe { Box::from_non_null(NonNull::dangling().cast_slice(0)) }, Some(iter));
+            return (unsafe { Box::from_non_null(NonNull::dangling().cast_slice_(0)) }, Some(iter));
         }
 
         // Write from the end backward so simplify shrinking the allocation.
@@ -376,7 +389,7 @@ impl Chunk {
         let remaining = if to_completion { None } else { Some(iter) };
 
         if guard.written == 0 {
-            return (unsafe { Box::from_non_null(NonNull::dangling().cast_slice(0)) }, remaining);
+            return (unsafe { Box::from_non_null(NonNull::dangling().cast_slice_(0)) }, remaining);
         }
 
         // Move bump pointer only for written elements.
@@ -384,7 +397,7 @@ impl Chunk {
         let final_ptr = unsafe { NonNull::new_unchecked(guard.current.cast::<u8>()) };
         self.header.current_bump_ptr = final_ptr;
 
-        let mut slice = unsafe { Box::from_non_null(final_ptr.cast::<T::Item>().cast_slice(guard.written)) };
+        let mut slice = unsafe { Box::from_non_null(final_ptr.cast::<T::Item>().cast_slice_(guard.written)) };
         // By default we must to reverse in order to get the original order since we use a downward bump allocator.
         if matches!(inserting_order, InsertingOrder::Original) {
             slice.reverse();
@@ -460,13 +473,13 @@ impl<'a> AllocDSTBuilder<'a> {
         }
 
         let final_ptr = unsafe { NonNull::new_unchecked(guard.current) };
-        let slice = final_ptr.cast_slice(guard.written * guard.element_size);
+        let slice = final_ptr.cast_slice_(guard.written * guard.element_size);
         // By default we must to reverse in order to get the original order since we use a downward bump allocator.
         if matches!(guard.builder.inserting_order(), InsertingOrder::Original) {
             let len = guard.written;
             let size = element_layout.size();
             if size > 0  {
-                let ptr = slice.as_mut_ptr();
+                let ptr = slice.as_mut_ptr_();
                 let mut a = ptr;
                 for i in 0..(len / 2) {
                     unsafe {
@@ -500,7 +513,7 @@ impl<'a> AllocDSTBuilder<'a> {
 
         chunk.header.current_bump_ptr = unsafe { NonNull::new_unchecked(header_start) };
 
-        let slice = unsafe { Box::from_non_null(NonNull::from_raw_parts(NonNull::new_unchecked(header_start), memory_len)) };
+        let slice = unsafe { Box::from_non_null(NonNull::new_unchecked(ptr_from_raw_parts_mut!(header_start, memory_len))) };
 
         return Ok((slice, write_element_state));
 
@@ -550,7 +563,7 @@ impl<'a> AllocDSTBuilder<'a> {
             if count {
                 if builder.write_header(&mut []) {
                     if builder.finalizer(&mut []) {
-                        Ok((unsafe { Box::from_non_null(NonNull::from_raw_parts(NonNull::<u8>::dangling(), 0)) }, WriteElementState::NeverStarted))
+                        Ok((unsafe { Box::from_non_null(nonnull_from_raw_parts!(NonNull::<u8>::dangling(), 0)) }, WriteElementState::NeverStarted))
                     } else {
                         Err(CancellationError::CancelledByFinalizer(WriteElementState::NeverStarted))
                     }
@@ -561,7 +574,7 @@ impl<'a> AllocDSTBuilder<'a> {
                 if builder.write_header(&mut []) {
                     while builder.write_element(&mut []) {}
                     if builder.finalizer(&mut []) {
-                        Ok((unsafe { Box::from_non_null(NonNull::from_raw_parts(NonNull::<u8>::dangling(), 0)) }, WriteElementState::NeverStarted))
+                        Ok((unsafe { Box::from_non_null(nonnull_from_raw_parts!(NonNull::<u8>::dangling(), 0)) }, WriteElementState::NeverStarted))
                     } else {
                         Err(CancellationError::CancelledByFinalizer(WriteElementState::NeverStarted))
                     }
@@ -598,14 +611,14 @@ impl DSTInfo {
         let element = builder.element_layout();
         let (min_element, _) = builder.elements_hint();
         let (mut min_layout, header_offset, align) = if min_element > 0 {
-            let (min_layout, header_offset) = header.extend(element.repeat(min_element).ok()?.0).ok()?;
+            let (min_layout, header_offset) = header.extend(element.repeat_(min_element).ok()?.0).ok()?;
             // Safe because it already could produce a bigger layout.
-            let align = unsafe { header.extend(element.repeat(1).unwrap_unchecked().0).unwrap_unchecked().0.pad_to_align().align() };
+            let align = unsafe { header.extend(element.repeat_(1).unwrap_unchecked().0).unwrap_unchecked().0.pad_to_align().align() };
             (min_layout, header_offset, align)
         } else {
-            let align = header.extend(element.repeat(1).ok()?.0).ok()?.0.pad_to_align().align();
+            let align = header.extend(element.repeat_(1).ok()?.0).ok()?.0.pad_to_align().align();
             // Safe because it already could produce a bigger layout.
-            let (min_layout, header_offset) = unsafe { header.extend(element.repeat(0).unwrap_unchecked().0).unwrap_unchecked() };
+            let (min_layout, header_offset) = unsafe { header.extend(element.repeat_(0).unwrap_unchecked().0).unwrap_unchecked() };
             (min_layout, header_offset, align)
         };
         min_layout = min_layout.pad_to_align();
