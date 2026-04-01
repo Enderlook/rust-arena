@@ -1,6 +1,6 @@
 use std::{alloc::Layout, cell::UnsafeCell, marker::PhantomData, mem::{self, MaybeUninit}, ops::Range, ptr::{self, NonNull}};
 
-use crate::{AllocError, AllocationInfo, Arena, Box, BuilderDST, CancellationError, Chunk, InsertingOrder, SENTINEL, Sentinel, SharedArena, WriteElementState, chunk::{ChunkPtr, DSTInfo}};
+use crate::{AllocError, AllocationInfo, Arena, Box, BuilderDST, CancellationError, Chunk, InsertingOrder, LocalArenaCheckpoint, SENTINEL, Sentinel, SharedArena, WriteElementState, chunk::{ChunkPtr, DSTInfo}};
 
 use crate::compatibility::*;
 
@@ -22,9 +22,45 @@ impl LocalArena {
         })
     }
 
+    pub(crate) fn get_chunk(&self) -> ChunkPtr {
+        unsafe { *self.frontier.get() }
+    }
+
+    pub(crate) fn rollback_to(&mut self, chunk: ChunkPtr, bump_ptr: NonNull<u8>) {
+        let sentinel = SENTINEL.get();
+        debug_assert!(sentinel.is_some(), "Should have value since this is only called from a constructed LocalArena.");
+        let sentinel = unsafe { sentinel.unwrap_unchecked().0 };
+        if sentinel.are_equal(chunk) {
+            self.reset();
+            return;
+        }
+
+        let root = unsafe { *self.frontier.get() };
+        let mut previous = root;
+        let mut current = root;
+        loop {
+            if current.are_equal(chunk) {
+                unsafe { previous.as_mut() }.header.prev = None;
+                unsafe { self.frontier.replace_(current); }
+                unsafe { current.as_mut() }.header.current_bump_ptr = bump_ptr;
+                self.shared.store_chunk(root);
+            } else {
+                previous = current;
+                let next = unsafe { current.as_mut() }.header.prev;
+                debug_assert!(next.is_some(), "Should have a value since this method is called from a checkpoint that is bound to that arena.");
+                current = unsafe { next.unwrap_unchecked() };
+            }
+        }
+    }
+
     /// Gets the shared arena where it belongs to.
     pub fn get_shared(&self) -> SharedArena {
         self.shared.clone()
+    }
+
+    /// Creates a new checkpoint.
+    pub fn make_checkpoint<'a>(&'a mut self) -> LocalArenaCheckpoint<'a> {
+        LocalArenaCheckpoint::make_checkpoint_owner(self)
     }
 
     #[cold]

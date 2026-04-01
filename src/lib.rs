@@ -7,6 +7,7 @@ mod boxed;
 mod chunk;
 mod local_arena;
 mod shared_arena;
+mod local_arena_checkpoint;
 
 pub(crate) mod compatibility;
 
@@ -27,6 +28,7 @@ use std::clone::CloneToUninit;
 pub use boxed::*;
 pub use local_arena::*;
 pub use shared_arena::*;
+pub use local_arena_checkpoint::*;
 
 use crate::chunk::{Chunk, ChunkPtr};
 
