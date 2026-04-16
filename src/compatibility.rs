@@ -1,4 +1,4 @@
-use std::{alloc::{Layout}, mem::MaybeUninit, ptr::{self, NonNull}};
+use std::{mem::MaybeUninit, ptr::{self, NonNull}};
 
 macro_rules! ptr_from_raw_parts_mut {
     ($p:expr, $l:expr) => { ptr_from_raw_parts_mut!($p, $l, _) };
@@ -65,11 +65,6 @@ pub trait UnsafeCell_<T: ?Sized> {
         where T: Sized;
 }
 
-pub trait Layout_ : Sized {
-    fn repeat_(&self, n: usize) -> Result<(Self, usize), ()>;
-    fn repeat_packed_(&self, n: usize) -> Result<Self, ()>;
-}
-
 impl<T> NonNull_<T> for NonNull<T> {
     #[inline(always)]
     fn cast_slice_(self, len: usize) -> NonNull<[T]> {
@@ -117,58 +112,4 @@ impl<T: ?Sized> UnsafeCell_<T> for std::cell::UnsafeCell<T> {
         // SAFETY: pointer comes from `&self` so naturally satisfies invariants.
         unsafe { ptr::replace(self.get(), value) }
     }
-}
-
-impl Layout_ for Layout {
-    #[inline]
-    fn repeat_(&self, n: usize) -> Result<(Self, usize), ()> {
-        let padded = self.pad_to_align();
-        if let Ok(repeated) = padded.repeat_packed_(n) {
-            Ok((repeated, padded.size()))
-        } else {
-            Err(())
-        }
-    }
-
-    #[inline]
-    fn repeat_packed_(&self, n: usize) -> Result<Self, ()> {
-        if let Some(size) = self.size().checked_mul(n) {
-            // The safe constructor is called here to enforce the isize size limit.
-            from_size_alignment(size, self.align())
-        } else {
-            Err(())
-        }
-    }
-}
-
-#[inline]
-const fn from_size_alignment(size: usize, align: usize) -> Result<Layout, ()> {
-    if size > max_size_for_align(align) {
-        return Err(());
-    }
-
-    // SAFETY: Layout::size invariants checked above.
-    Ok(unsafe { Layout::from_size_align_unchecked(size, align) })
-}
-
-#[inline(always)]
-const fn max_size_for_align(align: usize) -> usize {
-    // (power-of-two implies align != 0.)
-
-    // Rounded up size is:
-    //   size_rounded_up = (size + align - 1) & !(align - 1);
-    //
-    // We know from above that align != 0. If adding (align - 1)
-    // does not overflow, then rounding up will be fine.
-    //
-    // Conversely, &-masking with !(align - 1) will subtract off
-    // only low-order-bits. Thus if overflow occurs with the sum,
-    // the &-mask cannot subtract enough to undo that overflow.
-    //
-    // Above implies that checking for summation overflow is both
-    // necessary and sufficient.
-
-    // SAFETY: the maximum possible alignment is `isize::MAX + 1`,
-    // so the subtraction cannot overflow.
-    unsafe { usize::unchecked_sub(isize::MAX as usize + 1, align) }
 }

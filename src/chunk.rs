@@ -243,7 +243,7 @@ impl Chunk {
         // Calculate the alignment of the DST.
         // This works because the alignment of `T` and `[T; N]` is the same.
         let (align, header_offset) = match element_layout
-            .repeat_(1)
+            .repeat(1)
             .ok()
             .map(#[inline(always)] |e| header_layout.extend(e.0).ok())
             .flatten() {
@@ -269,7 +269,7 @@ impl Chunk {
         // In the case of having a ZST, the `element_size` would be 0, so we require to handle that.
         let max_fit = remaining_space.checked_div(element_size).unwrap_or(usize::MAX);
 
-        debug_assert_eq!(Some(align), element_layout.repeat_(max_fit).map(|e| header_layout.extend(e.0)).ok().map(|e| e.ok()).flatten().map(|e| e.0.pad_to_align().align()));
+        debug_assert_eq!(Some(align), element_layout.repeat(max_fit).map(|e| header_layout.extend(e.0)).ok().map(|e| e.ok()).flatten().map(|e| e.0.pad_to_align().align()));
 
         if max_fit < elements_len.start {
             return None;
@@ -611,14 +611,14 @@ impl DSTInfo {
         let element = builder.element_layout();
         let (min_element, _) = builder.elements_hint();
         let (mut min_layout, header_offset, align) = if min_element > 0 {
-            let (min_layout, header_offset) = header.extend(element.repeat_(min_element).ok()?.0).ok()?;
+            let (min_layout, header_offset) = header.extend(element.repeat(min_element).ok()?.0).ok()?;
             // Safe because it already could produce a bigger layout.
-            let align = unsafe { header.extend(element.repeat_(1).unwrap_unchecked().0).unwrap_unchecked().0.pad_to_align().align() };
+            let align = unsafe { header.extend(element.repeat(1).unwrap_unchecked().0).unwrap_unchecked().0.pad_to_align().align() };
             (min_layout, header_offset, align)
         } else {
-            let align = header.extend(element.repeat_(1).ok()?.0).ok()?.0.pad_to_align().align();
+            let align = header.extend(element.repeat(1).ok()?.0).ok()?.0.pad_to_align().align();
             // Safe because it already could produce a bigger layout.
-            let (min_layout, header_offset) = unsafe { header.extend(element.repeat_(0).unwrap_unchecked().0).unwrap_unchecked() };
+            let (min_layout, header_offset) = unsafe { header.extend(element.repeat(0).unwrap_unchecked().0).unwrap_unchecked() };
             (min_layout, header_offset, align)
         };
         min_layout = min_layout.pad_to_align();

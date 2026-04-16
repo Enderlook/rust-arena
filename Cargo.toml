@@ -8,6 +8,7 @@ documentation = "https://enderlook.github.io/rust-arena/"
 license = "AGPL-3.0-only"
 keywords = ["memory", "arena"]
 categories = ["memory-management"]
+rust-version = "1.95"
 
 [package.metadata.docs.rs]
 features = ["doc_cfg"]
